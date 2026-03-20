@@ -1,0 +1,164 @@
+{
+  "name": "AI Document Orchestrator Workflow (Groq)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "document-orchestrator",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node-id",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [-1504, -432],
+      "webhookId": "document-orchestrator"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer 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"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"llama-3.3-70b-versatile\",\n  messages: [{\n    role: \"user\",\n    content: \"Analyze this document text based on the query.\\n\\nQuery: \" + $json.body.query + \"\\n\\nExtracted Data: \" + JSON.stringify($json.body.extractedData) + \"\\n\\nDocument Text: \" + ($json.body.documentText || '').substring(0, 15000) + \"\\n\\nYou MUST reply with ONLY a raw JSON object with no markdown formatting. The JSON must have exactly two keys: \\\"answer\\\" (a detailed string analysis answering the query) and \\\"email_body\\\" (well-formatted HTML content for the email alert body).\"\n  }],\n  response_format: {type: \"json_object\"},\n  temperature: 0.3\n}) }}",
+        "options": {}
+      },
+      "id": "groq-http-node-id",
+      "name": "Groq AI - Answer & Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [-1264, -432]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Webhook').item.json.body.recipientEmail }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "if-node-id",
+      "name": "IF Email Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [-1024, -432]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Webhook').item.json.body.recipientEmail }}",
+        "subject": "AI Document Automation Alert",
+        "message": "={{ JSON.parse($node['Groq AI - Answer & Email'].json.choices[0].message.content).email_body }}",
+        "options": {
+          "senderName": "AI-Powered Document Orchestrator"
+        }
+      },
+      "id": "gmail-node-id",
+      "name": "Send Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [-768, -560]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ answer: JSON.parse($node['Groq AI - Answer & Email'].json.choices[0].message.content).answer, email_body: JSON.parse($node['Groq AI - Answer & Email'].json.choices[0].message.content).email_body, status: 'Email Sent Successfully' }) }}",
+        "options": {}
+      },
+      "id": "respond-sent-id",
+      "name": "Respond to Webhook (Sent)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [-512, -544]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ answer: JSON.parse($node['Groq AI - Answer & Email'].json.choices[0].message.content).answer, email_body: JSON.parse($node['Groq AI - Answer & Email'].json.choices[0].message.content).email_body, status: 'No email provided - skipped sending.' }) }}",
+        "options": {}
+      },
+      "id": "respond-no-email-id",
+      "name": "Respond to Webhook (No Email)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [-784, -320]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Groq AI - Answer & Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq AI - Answer & Email": {
+      "main": [
+        [
+          {
+            "node": "IF Email Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Email Exists": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook (No Email)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Gmail": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook (Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "groq-workflow-v1",
+  "id": "groq-doc-orchestrator-wf",
+  "tags": []
+}
