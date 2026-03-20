@@ -2,9 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
-const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
 require('dotenv').config();
+
+// Groq configuration — OpenAI-compatible API (groq.com)
+const GROK_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROK_MODEL = 'llama-3.3-70b-versatile';
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -21,22 +24,16 @@ app.get('/', (req, res) => {
   res.send('Backend API is running. Please use the frontend application to interact with this service.');
 });
 
-// Initialize Gemini SDK
-let ai;
-if (process.env.GEMINI_API_KEY) {
-  ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-}
-
-// Validation middleware
-const checkGeminiKey = (req, res, next) => {
-  if (!ai) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY is not configured in the backend.' });
+// Validation middleware — ensures GROQ_API_KEY is set
+const checkGrokKey = (req, res, next) => {
+  if (!process.env.GROQ_API_KEY) {
+    return res.status(500).json({ error: 'GROQ_API_KEY is not configured in the backend.' });
   }
   next();
 };
 
 // Endpoint: Extract Data
-app.post('/api/extract', upload.single('document'), checkGeminiKey, async (req, res) => {
+app.post('/api/extract', upload.single('document'), checkGrokKey, async (req, res) => {
   try {
     const { query } = req.body;
     const file = req.file;
@@ -64,36 +61,43 @@ app.post('/api/extract', upload.single('document'), checkGeminiKey, async (req, 
        return res.status(400).json({ error: 'Could not extract text from document.' });
     }
 
-    // Call Gemini API
-    const prompt = `
-      You are an expert data extraction assistant.
-      A user has uploaded a document and asked the following question: "${query}"
-      
-      Extract 5-8 most relevant key-value pairs related to the user's question from the text below.
-      Format the output strictly as a JSON object, with no markdown formatting or extra text.
-      For example: {"key1": "value1", "key2": "value2"}
-      
-      Document text:
-      ${extractedText.substring(0, 15000)}
-    `;
+    // Call Grok (xAI) API
+    const systemPrompt = 'You are an expert data extraction assistant. Always respond with a valid JSON object only — no markdown, no code fences, no extra text.';
+    const userPrompt = `A user has uploaded a document and asked: "${query}"
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-    });
+Extract 5-8 most relevant key-value pairs related to the question from the document text below.
+Respond ONLY with a JSON object. Example: {"key1": "value1", "key2": "value2"}
 
-    let jsonString = response.text;
-    if (jsonString.startsWith('```json')) {
-      jsonString = jsonString.replace(/```json/g, '').replace(/```/g, '').trim();
-    } else if (jsonString.startsWith('```')) {
-      jsonString = jsonString.replace(/```/g, '').trim();
-    }
+Document text:
+${extractedText.substring(0, 15000)}`;
+
+    const grokResponse = await axios.post(
+      GROK_API_URL,
+      {
+        model: GROK_MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    let jsonString = grokResponse.data.choices[0].message.content.trim();
+    // Strip any accidental markdown fences
+    jsonString = jsonString.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 
     let extractedJson = {};
     try {
       extractedJson = JSON.parse(jsonString);
     } catch(e) {
-      console.error("Failed to parse Gemini response as JSON", jsonString);
+      console.error('Failed to parse Grok response as JSON:', jsonString);
       return res.status(500).json({ error: 'AI did not return valid JSON. Response was: ' + jsonString });
     }
 
